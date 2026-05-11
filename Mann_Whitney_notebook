@@ -1,0 +1,143 @@
+import pandas as pd
+from scipy.stats import mannwhitneyu
+
+# =========================
+# 1. Rawdata load
+# =========================
+
+input_path = "rawdata.xlsx"              # 파일명 수정
+output_path = "mannwhitney_result.xlsx"  # 저장할 결과 파일명
+
+df = pd.read_excel(input_path)
+
+# CSV라면 위 한 줄 대신 아래 사용
+# df = pd.read_csv(input_path)
+
+# =========================
+# 2. Basic cleaning
+# =========================
+
+# 필요한 column만 사용
+df = df[["step_seq", "item_id", "value", "거리 구분", "Group"]].copy()
+
+# Group 빈칸은 EE-type으로 처리
+df["Group"] = df["Group"].fillna("").astype(str).str.strip()
+df.loc[df["Group"] == "", "Group"] = "EE-type"
+
+# 거리 구분 정리
+df["거리 구분"] = df["거리 구분"].fillna("").astype(str).str.strip()
+
+# value 숫자화
+df["value"] = (
+    df["value"]
+    .astype(str)
+    .str.replace(",", "", regex=False)
+)
+
+df["value"] = pd.to_numeric(df["value"], errors="coerce")
+
+# value 또는 거리 구분이 비어 있는 row 제거
+df = df.dropna(subset=["value"])
+df = df[df["거리 구분"] != ""].copy()
+
+# =========================
+# 3. Mann-Whitney U test 반복 수행
+# =========================
+
+result_list = []
+
+for (step_seq, item_id, group_name), sub_df in df.groupby(["step_seq", "item_id", "Group"]):
+    
+    # Reference group: 거리 구분 == E4
+    ref_raw = sub_df.loc[sub_df["거리 구분"] == "E4", "value"].dropna()
+    
+    # E4가 없으면 skip
+    if len(ref_raw) == 0:
+        continue
+    
+    # 비교 대상: E4를 제외한 나머지 거리 구분
+    comp_groups = sorted([
+        x for x in sub_df["거리 구분"].unique()
+        if x != "E4"
+    ])
+    
+    for comp_group in comp_groups:
+        
+        comp_raw = sub_df.loc[sub_df["거리 구분"] == comp_group, "value"].dropna()
+        
+        if len(comp_raw) == 0:
+            continue
+        
+        # -------------------------
+        # median은 outlier 제거 전 기준
+        # -------------------------
+        ref_median = ref_raw.median()
+        comp_median = comp_raw.median()
+        
+        # -------------------------
+        # Ref group outlier 제거
+        # rule of thumb: Q1 - 1.5*IQR ~ Q3 + 1.5*IQR
+        # -------------------------
+        ref_q1 = ref_raw.quantile(0.25)
+        ref_q3 = ref_raw.quantile(0.75)
+        ref_iqr = ref_q3 - ref_q1
+        
+        ref_lower = ref_q1 - 1.5 * ref_iqr
+        ref_upper = ref_q3 + 1.5 * ref_iqr
+        
+        ref_clean = ref_raw[
+            (ref_raw >= ref_lower) &
+            (ref_raw <= ref_upper)
+        ]
+        
+        # -------------------------
+        # Compare group outlier 제거
+        # -------------------------
+        comp_q1 = comp_raw.quantile(0.25)
+        comp_q3 = comp_raw.quantile(0.75)
+        comp_iqr = comp_q3 - comp_q1
+        
+        comp_lower = comp_q1 - 1.5 * comp_iqr
+        comp_upper = comp_q3 + 1.5 * comp_iqr
+        
+        comp_clean = comp_raw[
+            (comp_raw >= comp_lower) &
+            (comp_raw <= comp_upper)
+        ]
+        
+        # -------------------------
+        # Mann-Whitney U test
+        # p-value는 outlier 제거 후 기준
+        # -------------------------
+        if len(ref_clean) > 0 and len(comp_clean) > 0:
+            stat, p_value = mannwhitneyu(
+                ref_clean,
+                comp_clean,
+                alternative="two-sided"
+            )
+        else:
+            p_value = None
+        
+        result_list.append({
+            "step_seq": step_seq,
+            "item_id": item_id,
+            "Group": group_name,
+            "ref_group": "E4",
+            "comp_group": comp_group,
+            "ref_median": ref_median,
+            "comp_median": comp_median,
+            "p_value": p_value
+        })
+
+result = pd.DataFrame(result_list)
+
+result.head()
+
+# =========================
+# 4. 결과 저장
+# =========================
+
+result.to_excel(output_path, index=False)
+
+print(f"저장 완료: {output_path}")
+print(f"총 검정 횟수: {len(result)}")
