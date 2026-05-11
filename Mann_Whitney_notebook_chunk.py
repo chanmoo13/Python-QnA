@@ -20,6 +20,19 @@ result_cols = [
     "p_value"
 ]
 
+#Mood
+result_cols = [
+    "step_seq",
+    "item_id",
+    "Group",
+    "ref_group",
+    "comp_group",
+    "ref_median",
+    "comp_median",
+    "median_diff_comp_minus_ref",
+    "p_value"
+]
+
 # 기존 결과 파일 삭제
 if os.path.exists(output_path):
     os.remove(output_path)
@@ -50,6 +63,87 @@ def remove_outlier_iqr(x):
     
     return x[(x >= lower) & (x <= upper)]
 
+# Mood
+def make_result_rows(test_df):
+    """
+    완성된 step_seq + item_id 데이터에 대해서
+    Group별로 E4 vs 나머지 거리 구분을 Mood's median test로 검정
+    """
+    rows = []
+    
+    test_df = test_df.copy()
+    test_df["value"] = pd.to_numeric(test_df["value"], errors="coerce")
+    test_df = test_df.dropna(subset=["value"])
+    
+    for (step_seq, item_id), item_df in test_df.groupby(
+        ["step_seq", "item_id"],
+        sort=False
+    ):
+        for group_name, group_df in item_df.groupby("Group", sort=False):
+            
+            ref_raw = group_df.loc[
+                group_df["거리 구분"] == "E4",
+                "value"
+            ]
+            
+            ref_raw = pd.to_numeric(ref_raw, errors="coerce").dropna()
+            
+            if len(ref_raw) == 0:
+                continue
+            
+            comp_groups = [
+                x for x in group_df["거리 구분"].dropna().unique()
+                if x != "E4"
+            ]
+            
+            for comp_group in sorted(comp_groups):
+                
+                comp_raw = group_df.loc[
+                    group_df["거리 구분"] == comp_group,
+                    "value"
+                ]
+                
+                comp_raw = pd.to_numeric(comp_raw, errors="coerce").dropna()
+                
+                if len(comp_raw) == 0:
+                    continue
+                
+                # median은 raw data 기준
+                ref_median = ref_raw.median()
+                comp_median = comp_raw.median()
+                median_diff = comp_median - ref_median
+                
+                # scipy에 넣기 전 float array로 변환
+                ref_arr = ref_raw.to_numpy(dtype="float64")
+                comp_arr = comp_raw.to_numpy(dtype="float64")
+                
+                # Mood's median test
+                if len(ref_arr) > 0 and len(comp_arr) > 0:
+                    try:
+                        stat, p_value, pooled_median, table = median_test(
+                            ref_arr,
+                            comp_arr,
+                            ties="below",
+                            correction=True
+                        )
+                    except Exception:
+                        p_value = pd.NA
+                else:
+                    p_value = pd.NA
+                
+                rows.append({
+                    "step_seq": step_seq,
+                    "item_id": item_id,
+                    "Group": group_name,
+                    "ref_group": "E4",
+                    "comp_group": comp_group,
+                    "ref_median": ref_median,
+                    "comp_median": comp_median,
+                    "median_diff_comp_minus_ref": median_diff,
+                    "p_value": p_value
+                })
+    
+    return rows
 
 def make_result_rows(test_df):
     """
