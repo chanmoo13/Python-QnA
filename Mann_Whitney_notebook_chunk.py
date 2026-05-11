@@ -26,15 +26,17 @@ if os.path.exists(output_path):
     
 
 # =========================
-# 2. 최소 helper
+# 2. 최소 helper - 수정 버전
 # =========================
 
 def remove_outlier_iqr(x):
     """
     Rule of thumb outlier 제거:
     Q1 - 1.5*IQR ~ Q3 + 1.5*IQR
+    
+    Mann-Whitney 오류 방지를 위해 무조건 numeric으로 변환.
     """
-    x = x.dropna()
+    x = pd.to_numeric(x, errors="coerce").dropna()
     
     if len(x) == 0:
         return x
@@ -56,6 +58,11 @@ def make_result_rows(test_df):
     """
     rows = []
     
+    # value를 다시 한번 numeric으로 강제 변환
+    test_df = test_df.copy()
+    test_df["value"] = pd.to_numeric(test_df["value"], errors="coerce")
+    test_df = test_df.dropna(subset=["value"])
+    
     for (step_seq, item_id), item_df in test_df.groupby(
         ["step_seq", "item_id"],
         sort=False
@@ -65,7 +72,9 @@ def make_result_rows(test_df):
             ref_raw = group_df.loc[
                 group_df["거리 구분"] == "E4",
                 "value"
-            ].dropna()
+            ]
+            
+            ref_raw = pd.to_numeric(ref_raw, errors="coerce").dropna()
             
             if len(ref_raw) == 0:
                 continue
@@ -80,7 +89,9 @@ def make_result_rows(test_df):
                 comp_raw = group_df.loc[
                     group_df["거리 구분"] == comp_group,
                     "value"
-                ].dropna()
+                ]
+                
+                comp_raw = pd.to_numeric(comp_raw, errors="coerce").dropna()
                 
                 if len(comp_raw) == 0:
                     continue
@@ -93,14 +104,18 @@ def make_result_rows(test_df):
                 ref_clean = remove_outlier_iqr(ref_raw)
                 comp_clean = remove_outlier_iqr(comp_raw)
                 
-                if len(ref_clean) > 0 and len(comp_clean) > 0:
+                # scipy에 넣기 직전 numpy float array로 강제 변환
+                ref_arr = pd.to_numeric(ref_clean, errors="coerce").dropna().to_numpy(dtype="float64")
+                comp_arr = pd.to_numeric(comp_clean, errors="coerce").dropna().to_numpy(dtype="float64")
+                
+                if len(ref_arr) > 0 and len(comp_arr) > 0:
                     p_value = mannwhitneyu(
-                        ref_clean,
-                        comp_clean,
+                        ref_arr,
+                        comp_arr,
                         alternative="two-sided"
                     ).pvalue
                 else:
-                    p_value = pd.NA
+                    p_value = None
                 
                 rows.append({
                     "step_seq": step_seq,
